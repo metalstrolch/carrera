@@ -3,6 +3,7 @@
  *
  * Created: 08.01.2018 15:27:24
  * Author : Alexander Zakharyan
+ * Author : Stefan Wildemann
  */ 
 
 #include <avr/io.h>
@@ -11,6 +12,7 @@
 #include <avr/eeprom.h>
 #include <avr/sleep.h>
 #include <avr/power.h>
+#include <avr/pgmspace.h>
 
 #define TRACK_PIN PB4
 #define MOTOR_PIN PB1
@@ -27,7 +29,7 @@
 #define STOPLIGHT_DELAY_MS 500
 #define STOPLIGHT_DELAY STOPLIGHT_DELAY_MS/PACKET_PERIOD_MS
 
-#define TRANSM_FREQ 9800
+#define TRANSM_FREQ 10000
 #define PERIOD_QURT_CICLES F_CPU/TRANSM_FREQ/4
 
 #define PROG_WORD_CHECK 12
@@ -40,14 +42,27 @@
 #define SHORT_TONE_MS 100
 #define LONG_TONE_MS 200
 
-#define MIN_CAR_SPEED_MULTIPLIER 9
-#define MAX_CAR_SPEED_MULTIPLIER 14
+#define MAX_CAR_SPEED_CURVE 9
+#define MAX_CAR_SPEED 15
 
 uint8_t EEMEM eeprom_carID; 
 uint8_t EEMEM eeprom_progInNextPowerOn; 
 uint8_t EEMEM eeprom_ghostSpeed; 
-uint8_t EEMEM eeprom_speedMultiplier; 
+uint8_t EEMEM eeprom_speedCurve; 
 uint8_t EEMEM eeprom_lightOn;
+
+const uint8_t speedTable[MAX_CAR_SPEED_CURVE + 1][MAX_CAR_SPEED + 1] PROGMEM = {
+				    {0,  5, 10, 20, 25, 30,  35,  40,  45,  50,  55,  60,  70,  80,  90, 110}, // child 1, very slow
+				    {0, 10, 20, 31, 41, 51,  61,  71,  82,  92, 102, 112, 122, 133, 143, 153}, // child 2, medium
+				    {0, 38, 46, 56, 65, 77,  85,  94, 103, 114, 124, 133, 142, 151, 161, 179}, // child 3, fast
+				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
+				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
+				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
+				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
+				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
+				    {0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255}, //full throttle 2, linear
+				    {0,  2, 13, 24, 35, 46,  57,  68,  79,  90, 105, 125, 150, 175, 210, 255}, // full throttle 1, flat
+				   };
 
 uint8_t volatile carID = 255;
 uint8_t volatile currentSpeed = 0;
@@ -59,7 +74,7 @@ uint8_t volatile progMode = 0;
 uint8_t volatile progGhostMode = 0;
 uint8_t volatile progSpeedMode = 0;
 uint8_t volatile ghostSpeed = 0;
-uint8_t volatile speedMultiplier = 14;
+uint8_t volatile speedCurve = 0;
 uint8_t volatile progSpeedSelecter = 0;
 uint8_t volatile lightOn = 0;
 uint8_t volatile stopTime = 0;
@@ -106,8 +121,10 @@ void interruptsInit() {
 }
 
 void setCarSpeed(uint8_t speed) {
+	if(speed > MAX_CAR_SPEED)
+		speed = MAX_CAR_SPEED;
 	currentSpeed = speed;
-	OCR0B = 255 - speed * speedMultiplier;	
+	OCR0B = 255 - pgm_read_byte(&speedTable[speedCurve][speed]);
 }
 
 void setCarID(uint8_t newId) {
@@ -161,9 +178,9 @@ void stopLightMiddleOn() {
 
 void stopProg() {
 	if (progSpeedMode) {
-		speedMultiplier = MIN_CAR_SPEED_MULTIPLIER + progSpeedSelecter;
+		speedCurve = progSpeedSelecter;
 		progSpeedMode = 0;
-		eeprom_write_byte(&eeprom_speedMultiplier, speedMultiplier);	
+		eeprom_write_byte(&eeprom_speedCurve, speedCurve);
 	}
 	progMode = 0;
 }
@@ -178,12 +195,16 @@ void onMultiClick(uint8_t controllerId, uint8_t clickCount) {
 		setCarID(GHOST_CAR_ID);
 		playTone();
 	} else if (progSpeedMode) {
+		uint8_t a;
 		playTone();
 		progSpeedSelecter++;
-		if (progSpeedSelecter == 5) {
-			_delay_ms(50);
+		if(progSpeedSelecter > MAX_CAR_SPEED_CURVE)
+		{
+		    progSpeedSelecter = 0;
+		}
+		for(a = 0; a < progSpeedSelecter; a++) {
+			_delay_ms(100);
 			playTone();
-			stopProg();
 		}
 	} else if ((clickCount > 1) && (currentSpeed == 0)) {
 		playTone();
@@ -231,8 +252,69 @@ void checkDblClick(uint8_t controllerId, uint8_t sw) {
 	}
 }
 
-void onProgramDataWordReceived(uint16_t word) {
+int8_t reverseBits(uint8_t byte) {
+        uint8_t value = 0;
+        if(byte & 0x80) value |= 0x1;
+        if(byte & 0x40) value |= 0x2;
+        if(byte & 0x20) value |= 0x4;
+        if(byte & 0x10) value |= 0x8;
+        if(byte & 0x8) value |= 0x10;
+        if(byte & 0x4) value |= 0x20;
+        if(byte & 0x2) value |= 0x40;
+        if(byte & 0x1) value |= 0x80;
+        return value;
+}
 
+uint16_t reverseBitsW(uint16_t word) {
+        uint8_t high = reverseBits((word >> 8) & 0xFF);
+        uint8_t low = reverseBits((word) & 0xFF);
+        uint16_t value = (((uint16_t) low) << 8) | ((uint16_t) high);
+        return value;
+}
+
+void onProgramDataWordReceived(uint16_t word) {
+	word = reverseBitsW(word);
+	uint8_t controllerId = (word >> 13) & 0x07;
+	uint8_t command = (word >> 8 ) & 0x1F;
+	uint8_t value = (word >> 4) & 0x0F;
+
+	if(controllerId == carID)
+	{
+		/* seems we got a command */
+		if (command == 0) {
+			/*Program speed: value 1 to 10 from CU */
+			value --; // 0 to 9
+			if(value > MAX_CAR_SPEED_CURVE)
+			{
+				value = MAX_CAR_SPEED_CURVE;
+			}
+			if(speedCurve != value)
+			{
+				speedCurve = value;
+				eeprom_write_byte(&eeprom_speedCurve, speedCurve);
+			}
+		}
+		if (command == 1) {
+			/*Program brake: value 1 to 10 from CU */
+			/* no brake here */
+			while(value > 0)
+			{
+				_delay_ms(50);
+				value --;
+				playTone();
+			}
+		}
+		if (command == 2) {
+			/*Programfuel level: value 1 to 10 from CU */
+			/* no fuel here */
+			while(value > 0)
+			{
+				_delay_ms(50);
+				value --;
+				playTone();
+			}
+		}
+	}
 }
 
 void onActiveControllerWordReceived(uint16_t word) {
@@ -329,9 +411,9 @@ ISR(PCINT0_vect) {
 int main(void) {
 	carID = eeprom_read_byte(&eeprom_carID);
 	ghostSpeed = eeprom_read_byte(&eeprom_ghostSpeed);
-	speedMultiplier = eeprom_read_byte(&eeprom_speedMultiplier);
-	if (speedMultiplier > MAX_CAR_SPEED_MULTIPLIER) {
-		speedMultiplier = MAX_CAR_SPEED_MULTIPLIER;
+	speedCurve = eeprom_read_byte(&eeprom_speedCurve);
+	if (speedCurve > MAX_CAR_SPEED_CURVE) {
+		speedCurve = MAX_CAR_SPEED_CURVE;
 	}
 	progMode = eeprom_read_byte(&eeprom_progInNextPowerOn);
 	if (progMode) {
