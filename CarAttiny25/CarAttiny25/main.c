@@ -73,6 +73,7 @@ uint8_t volatile notClickSWTime = 0;
 uint8_t volatile progMode = 0;
 uint8_t volatile progGhostMode = 0;
 uint8_t volatile progSpeedMode = 0;
+uint8_t volatile ghostStop = 0; /* ghostcar atopped == 1, ghostcar free to run == 0 */
 uint8_t volatile ghostSpeed = 0;
 uint8_t volatile speedCurve = 0;
 uint8_t volatile progSpeedSelecter = 0;
@@ -207,7 +208,6 @@ void onMultiClick(uint8_t controllerId, uint8_t clickCount) {
 			playTone();
 		}
 	} else if ((clickCount > 1) && (currentSpeed == 0)) {
-		playTone();
 		if (progMode) {
 			_delay_ms(50);
 			playTone();
@@ -217,7 +217,7 @@ void onMultiClick(uint8_t controllerId, uint8_t clickCount) {
 				progSpeedMode = 1;
 				progSpeedSelecter = 0;
 			} else if (clickCount == 4) {
-				carID = controllerId;
+				setCarID(controllerId);
 				progGhostMode = 1;
 			} else {
 				progMode = 0;
@@ -225,6 +225,8 @@ void onMultiClick(uint8_t controllerId, uint8_t clickCount) {
 		} else {
 			eeprom_write_byte(&eeprom_progInNextPowerOn, 1);
 		}
+		/* done preparing prog mode. Tell user */
+		playTone();
 	}
 }
 
@@ -282,7 +284,7 @@ void onProgramDataWordReceived(uint16_t word) {
 	{
 		/* seems we got a command */
 		if (command == 0) {
-			/*Program speed: value 1 to 10 from CU */
+			/* Program speed: value 1 to 10 from CU */
 			value --; // 0 to 9
 			if(value > MAX_CAR_SPEED_CURVE)
 			{
@@ -295,7 +297,7 @@ void onProgramDataWordReceived(uint16_t word) {
 			}
 		}
 		if (command == 1) {
-			/*Program brake: value 1 to 10 from CU */
+			/* Program brake: value 1 to 10 from CU */
 			/* no brake here */
 			while(value > 0)
 			{
@@ -305,7 +307,7 @@ void onProgramDataWordReceived(uint16_t word) {
 			}
 		}
 		if (command == 2) {
-			/*Programfuel level: value 1 to 10 from CU */
+			/* Program fuel level: value 1 to 10 from CU */
 			/* no fuel here */
 			while(value > 0)
 			{
@@ -333,19 +335,43 @@ void onActiveControllerWordReceived(uint16_t word) {
 	}
 	
 	uint8_t currentKeyPressed = (word << (carID & 0x0F)) & 0x40;
+	/* Run the ghostcar in case the CU doesn't send the ghostcar word.
+	 * If it does, ghostStop wins*/
 	if (carID == GHOST_CAR_ID) {
-		if ((currentSpeed == 0) && anyKeyPressed) {
+		if ((!ghostStop) && anyKeyPressed) {
 			setCarSpeed(ghostSpeed);
 		}
 	} else {
 		if (currentKeyPressed) {
+			/* We're standing still. but our key was pressed. Prearm motor...*/
 			if (currentSpeed == 0) {
 				setCarSpeed(1);
 			}
 		} else {
+			/* We're driving. Since our key is not pressed anymore stop motor */
 			setCarSpeed(0);
 		}
 	}
+}
+
+void onGhostcarWordReceived(uint16_t word)
+{
+	/* decode if shostcar is allowed to run */
+	ghostStop = (word >> 5) & 0x01;
+	if(carID == GHOST_CAR_ID)
+	{
+		/* we are a ghostcar. Check if we need to stop */
+		if(ghostStop == 1)
+		{
+			setCarSpeed(0);
+		}
+		else
+		{
+			setCarSpeed(ghostSpeed);
+		}
+	}
+	//uint8_t pacecarActive = (word >> 1) & 0x01;
+	//uint8_t pacecarOnTrack = (word >> 2) & 0x01;
 }
 
 void onControllerWordReceived(uint16_t word) {
@@ -369,6 +395,8 @@ void onWordReceived(uint16_t word) {
 	if ((word >> CONTROLLER_WORD_CHECK) == 1) {
 		if ((word >> 6) != 0x0F) {
 			onControllerWordReceived(word);
+		} else {
+			onGhostcarWordReceived(word);
 		}
 	} else
 	if ((word >> PROG_WORD_CHECK) == 1) {
