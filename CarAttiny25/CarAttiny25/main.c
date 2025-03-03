@@ -44,7 +44,7 @@
 #define SHORT_TONE_MS 100
 #define LONG_TONE_MS 200
 
-#define MAX_CAR_SPEED_CURVE 9
+#define MAX_CAR_SPEED_CURVE 15
 #define MAX_CAR_SPEED 15
 
 uint8_t EEMEM eeprom_carID; 
@@ -54,17 +54,23 @@ uint8_t EEMEM eeprom_speedCurve;
 uint8_t EEMEM eeprom_lightOn;
 
 const uint8_t speedTable[MAX_CAR_SPEED_CURVE + 1][MAX_CAR_SPEED + 1] PROGMEM = {
-				    {0,  5, 10, 20, 25, 30,  35,  40,  45,  50,  55,  60,  70,  80,  90, 110}, // child 1, very slow
-				    {0, 10, 20, 31, 41, 51,  61,  71,  82,  92, 102, 112, 122, 133, 143, 153}, // child 2, medium
-				    {0, 38, 46, 56, 65, 77,  85,  94, 103, 114, 124, 133, 142, 151, 161, 179}, // child 3, fast
-				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
-				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
-				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
-				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
-				    {0,  5, 12, 18, 27, 39,  53,  67,  81,  95, 109, 124, 138, 153, 156, 155},
-				    {0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255}, //full throttle 2, linear
-				    {0,  2, 13, 24, 35, 46,  57,  68,  79,  90, 105, 125, 150, 175, 210, 255}, // full throttle 1, flat
-				   };
+	{  0,  3,  6, 11, 14, 19, 22, 26, 30, 34, 38, 42, 45, 50, 53, 62},  //
+	{  0,  4,  8, 14, 18, 24, 28, 32, 38, 42, 48, 52, 56, 62, 66, 76},  // 1. LED blinkt
+	{  0,  4, 10, 16, 22, 28, 32, 38, 44, 50, 56, 60, 66, 72, 78, 88},  // 1. LED an
+	{  0,  6, 13, 22, 28, 34, 40, 46, 52, 58, 64, 70, 76, 82, 88,100},  // 2. LED blinkt
+	{  0,  7, 15, 23, 30, 37, 44, 51, 58, 65, 72, 79, 86, 93,100,115},  //
+	{  0,  8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,104,112,126},  // 2. LED an
+	{  0,  8, 16, 26, 36, 44, 56, 64, 72, 80, 88, 96,104,113,122,138},  // 3. LED blinkt
+	{  0,  8, 18, 28, 38, 48, 56, 66, 76, 86, 96,104,114,124,133,152},  // 3. LED an
+	{  0,  9, 20, 32, 41, 52, 62, 72, 83, 94,104,114,125,136,147,165},  //
+	{  0, 10, 22, 35, 44, 56, 67, 78, 90,101,112,124,136,148,160,176},  // 4. LED blinkt
+	{  0, 11, 23, 37, 48, 60, 72, 84, 96,108,120,132,144,157,169,190},  //
+	{  0, 12, 24, 38, 51, 64, 76, 89,102,115,128,140,152,165,178,202},  // 4. LED an
+	{  0, 13, 26, 41, 55, 68, 81, 95,108,122,136,149,162,176,189,215},  //
+	{  0, 14, 28, 43, 58, 72, 86,100,114,129,144,158,172,186,200,228},  // 5. LED blinkt
+	{  0, 15, 30, 46, 61, 76, 91,106,121,137,152,167,182,197,212,240},  //
+	{  0, 16, 32, 48, 64, 80, 96,112,128,144,160,176,192,208,224,255},  // 5. LED an
+};
 
 uint8_t volatile carID = 255;
 uint8_t volatile currentSpeed = 0;
@@ -97,7 +103,7 @@ void playTone() {
 	sei();
 }
 
-void timersInit() {
+static inline void timersInit() {
 	// MOTOR PWM
 	TCCR0A = (1 << COM0B0) | (1 << COM0B1) | (3 << WGM00);
 	TCCR0B = (0 << WGM02) | (1 << CS00); // no div
@@ -112,14 +118,14 @@ void startLEDPWM() {
 	OCR1A = OCR1C - 16;
 }
 
-void pinsInit() {
+static inline void pinsInit() {
 	DDRB = (1 << MOTOR_PIN) | (1 << IRLED_PIN) | (1 << FRONTLIGHT_PIN) | (1 << STOPLIGHT_PIN); //sets as output
 	
 	PORTB = (1 << TRACK_PIN); //PullUp TRACK
 	PORTB |= (1 << NU_PIN3); //PullUp not used pins
 }
 
-void interruptsInit() {
+static inline void interruptsInit() {
 	GIMSK = (1 << PCIE); //turn on PCINT
 	MCUCR = (1 << ISC01) | (0 << ISC00); // falling front
 	PCMSK = (1 << TRACK_PIN); //turn on interrupts only on TRACK
@@ -139,7 +145,7 @@ void setCarID(uint8_t newId) {
 	startLEDPWM();
 }
 
-void calcStopTime(uint8_t speed) {
+static inline void calcStopTime(uint8_t speed) {
 	if (speed == 0) {
 		if (stopTime < 255) {
 			stopTime++;
@@ -154,18 +160,18 @@ void setLights() {
 	PORTB |= (lightOn & ((1 << FRONTLIGHT_PIN) | (1 << STOPLIGHT_PIN)));
 }
 
-void blinkLights() {
-	PORTB ^= (1 << FRONTLIGHT_PIN);	
-}
+//void blinkLights() {
+//	PORTB ^= (1 << FRONTLIGHT_PIN);	
+//}
 
-void switchFrontLight() {
+static inline void switchFrontLight() {
 	stopTime = STOPBEFORELIGHT_DELAY - DBLCLICK_DELAY;
 	lightOn = ~lightOn;
 	eeprom_write_byte(&eeprom_lightOn, lightOn);
 	setLights();
 }
 
-void calcStopLightTime(uint8_t speed) {
+static inline void calcStopLightTime(uint8_t speed) {
 	if (lastSpeed - speed > 2) {
 		stopLightTime = STOPLIGHT_DELAY;
 		setLights();
@@ -176,7 +182,7 @@ void calcStopLightTime(uint8_t speed) {
 	}
 }
 
-void stopLightMiddleOn() {
+static inline void stopLightMiddleOn() {
 	if (lightOn && (stopLightTime == 0)) {
 		PORTB ^= (1 << STOPLIGHT_PIN);
 	}
@@ -202,7 +208,7 @@ void setProgMode(uint8_t mode)
 	}
 }
 
-void onAnyKeyPressed() {
+static inline void onAnyKeyPressed() {
 	/* stop timeout */
 	switch(progMode)
 	{
@@ -220,7 +226,7 @@ void onAnyKeyPressed() {
 	}
 }
 
-void onProgTimeout()
+static inline void onProgTimeout()
 {
 	if(progMode == PROG_MODE_WAIT_FOR_PACECAR)
 	{
@@ -267,7 +273,7 @@ void onClick(uint8_t controllerId)
 	}
 }
 
-void onDoubleClick(uint8_t controllerId)
+static inline void onDoubleClick(uint8_t controllerId)
 {
 	/* only react on double clicks if vehicle is standing */
 	if(currentSpeed == 0)
@@ -301,7 +307,7 @@ void onDoubleClick(uint8_t controllerId)
 	}
 }
 
-void checkDblClick(uint8_t controllerId, uint8_t sw) {
+static inline void checkDblClick(uint8_t controllerId, uint8_t sw) {
 	static volatile uint8_t lastClick=255;
 	static volatile uint8_t clickTimeout=0;
 	if (sw) { // not pressed
@@ -335,7 +341,7 @@ void checkDblClick(uint8_t controllerId, uint8_t sw) {
 	}
 }
 
-int8_t reverseBits(uint8_t byte) {
+static inline int8_t reverseBits(uint8_t byte) {
         uint8_t value = 0;
         if(byte & 0x80) value |= 0x1;
         if(byte & 0x40) value |= 0x2;
@@ -348,14 +354,14 @@ int8_t reverseBits(uint8_t byte) {
         return value;
 }
 
-uint16_t reverseBitsW(uint16_t word) {
+static inline uint16_t reverseBitsW(uint16_t word) {
         uint8_t high = reverseBits((word >> 8) & 0xFF);
         uint8_t low = reverseBits((word) & 0xFF);
         uint16_t value = (((uint16_t) low) << 8) | ((uint16_t) high);
         return value;
 }
 
-void onProgramDataWordReceived(uint16_t word) {
+static inline void onProgramDataWordReceived(uint16_t word) {
 	word = reverseBitsW(word);
 	uint8_t controllerId = (word >> 13) & 0x07;
 	uint8_t command = (word >> 8 ) & 0x1F;
@@ -364,43 +370,33 @@ void onProgramDataWordReceived(uint16_t word) {
 	if(controllerId == carID)
 	{
 		/* seems we got a command */
-		if (command == 0) {
-			/* Program speed: value 1 to 10 from CU */
-			value --; // 0 to 9
-			if(value > MAX_CAR_SPEED_CURVE)
-			{
-				value = MAX_CAR_SPEED_CURVE;
-			}
-			if(speedCurve != value)
-			{
-				speedCurve = value;
-				eeprom_write_byte(&eeprom_speedCurve, speedCurve);
-			}
-		}
-		if (command == 1) {
-			/* Program brake: value 1 to 10 from CU */
-			/* no brake here */
-			while(value > 0)
-			{
-				_delay_ms(50);
-				value --;
-				playTone();
-			}
-		}
-		if (command == 2) {
-			/* Program fuel level: value 1 to 10 from CU */
-			/* no fuel here */
-			while(value > 0)
-			{
-				_delay_ms(50);
-				value --;
-				playTone();
-			}
+		switch(command)
+		{
+			case 0:
+				/* Program speed: value 1 to 15 from CU */
+				/* no need for boundary check of value. It's 4 bit max */
+				if(speedCurve != value)
+				{
+					speedCurve = value;
+					eeprom_write_byte(&eeprom_speedCurve, speedCurve);
+				}
+				break;
+			case 1:
+			case 2:
+				/* Program brake or fuel level: value 1 to 15 from CU */
+				/* no brake or fuel level here */
+				while(value > 0)
+				{
+					_delay_ms(50);
+					value --;
+					playTone();
+				}
+				break;
 		}
 	}
 }
 
-void onActiveControllerWordReceived(uint16_t word) {
+static inline void onActiveControllerWordReceived(uint16_t word) {
 	uint8_t parity = word & 0xFE;
 	parity = parity ^ (parity >> 4);
 	parity ^= parity >> 2;
@@ -435,7 +431,7 @@ void onActiveControllerWordReceived(uint16_t word) {
 	}
 }
 
-void onGhostcarWordReceived(uint16_t word)
+static inline void onGhostcarWordReceived(uint16_t word)
 {
 	/* decode if shostcar is allowed to run */
 	ghostRun = (word >> 3) & 0x01;
@@ -460,7 +456,7 @@ void onGhostcarWordReceived(uint16_t word)
 	//uint8_t pacecarOnTrack = (word >> 2) & 0x01;
 }
 
-void onControllerWordReceived(uint16_t word) {
+static inline void onControllerWordReceived(uint16_t word) {
 	uint8_t controllerId = (word >> 6) & 0x07;
 	uint8_t speed = (word >> 1) & 0x0F;
 	uint8_t sw = (word >> 5) & 1;
@@ -487,7 +483,7 @@ void onControllerWordReceived(uint16_t word) {
 	checkDblClick(controllerId, sw);
 }
 
-void onWordReceived(uint16_t word) {
+static inline void onWordReceived(uint16_t word) {
 	stopLightMiddleOn();
 	if ((word >> CONTROLLER_WORD_CHECK) == 1) {
 		if ((word >> 6) != 0x0F) {
