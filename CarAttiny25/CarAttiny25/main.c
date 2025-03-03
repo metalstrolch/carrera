@@ -24,6 +24,8 @@
 #define PACKET_PERIOD_MS 75
 #define DBLCLICK_DELAY_MS 250
 #define DBLCLICK_DELAY DBLCLICK_DELAY_MS/PACKET_PERIOD_MS
+#define PROG_TIMEOUT_MS 2000
+#define PROG_TIMEOUT PROG_TIMEOUT_MS/PACKET_PERIOD_MS
 #define STOPBEFORELIGHT_DELAY_MS 3000
 #define STOPBEFORELIGHT_DELAY STOPBEFORELIGHT_DELAY_MS/PACKET_PERIOD_MS
 #define STOPLIGHT_DELAY_MS 500
@@ -66,14 +68,17 @@ const uint8_t speedTable[MAX_CAR_SPEED_CURVE + 1][MAX_CAR_SPEED + 1] PROGMEM = {
 
 uint8_t volatile carID = 255;
 uint8_t volatile currentSpeed = 0;
-uint8_t volatile sincWordIndex = 0;
-uint8_t volatile doubleClickControllerId = 255;
-uint8_t volatile countClickSW = 0;
-uint8_t volatile notClickSWTime = 0;
-uint8_t volatile progMode = 0;
-uint8_t volatile progGhostMode = 0;
-uint8_t volatile progSpeedMode = 0;
-uint8_t volatile ghostStop = 0; /* ghostcar atopped == 1, ghostcar free to run == 0 */
+#define PROG_MODE_TO 0x10
+#define PROG_MODE_NONE 0
+#define PROG_MODE_CONTROLLER 1
+#define PROG_MODE_GHOSTCAR 2
+#define PROG_MODE_PACECAR 3
+#define PROG_MODE_SPEED (PROG_MODE_NONE | 0x80)
+#define PROG_MODE_WAIT_FOR_GHOSTCAR (PROG_MODE_NONE | PROG_MODE_TO)
+#define PROG_MODE_WAIT_FOR_PACECAR (PROG_MODE_PACECAR | PROG_MODE_TO)
+uint8_t volatile progMode = 0; /* 0 normal, 1 controller, 2 ghostcar, 3 pacecar */
+uint8_t volatile progTimer = 0;
+uint8_t volatile ghostRun = 1; /* ghostcar stopped == 0, ghostcar free to run == 1 */
 uint8_t volatile ghostSpeed = 0;
 uint8_t volatile speedCurve = 0;
 uint8_t volatile progSpeedSelecter = 0;
@@ -177,79 +182,155 @@ void stopLightMiddleOn() {
 	}
 }
 
-void stopProg() {
-	if (progSpeedMode) {
-		speedCurve = progSpeedSelecter;
-		progSpeedMode = 0;
-		eeprom_write_byte(&eeprom_speedCurve, speedCurve);
+void setProgMode(uint8_t mode)
+{
+	if(mode == 0xff)
+	{
+		mode = PROG_MODE_NONE;
 	}
-	progMode = 0;
+	if(progMode != mode)
+	{
+		progMode = mode;
+		eeprom_write_byte(&eeprom_progInNextPowerOn, mode & 0x0f);
+	}
+	if((mode == PROG_MODE_CONTROLLER) || ((mode & PROG_MODE_TO) == PROG_MODE_TO))
+	{
+		progTimer = PROG_TIMEOUT;
+	} else
+	{
+		progTimer = 0;
+	}
 }
 
-void onMultiClick(uint8_t controllerId, uint8_t clickCount) {
-	if (progGhostMode) {
-		ghostSpeed = currentSpeed;
-		currentSpeed = 0;
-		progGhostMode = 0;
-		progMode = 0;
-		eeprom_write_byte(&eeprom_ghostSpeed, ghostSpeed);
-		setCarID(GHOST_CAR_ID);
-		playTone();
-	} else if (progSpeedMode) {
-		uint8_t a;
-		playTone();
-		progSpeedSelecter++;
-		if(progSpeedSelecter > MAX_CAR_SPEED_CURVE)
-		{
-		    progSpeedSelecter = 0;
-		}
-		for(a = 0; a < progSpeedSelecter; a++) {
-			_delay_ms(100);
-			playTone();
-		}
-	} else if ((clickCount > 1) && (currentSpeed == 0)) {
-		if (progMode) {
-			_delay_ms(50);
-			playTone();
-			if (clickCount == 2) {
-				setCarID(controllerId);
-			} else if (clickCount == 3) {
-				progSpeedMode = 1;
-				progSpeedSelecter = 0;
-			} else if (clickCount == 4) {
-				setCarID(controllerId);
-				progGhostMode = 1;
-			} else {
-				progMode = 0;
+void onAnyKeyPressed() {
+	/* stop timeout */
+	switch(progMode)
+	{
+		case PROG_MODE_WAIT_FOR_PACECAR:
+			setProgMode(PROG_MODE_GHOSTCAR);
+			break;
+		case PROG_MODE_WAIT_FOR_GHOSTCAR:
+			setProgMode(PROG_MODE_NONE);
+			break;
+		case PROG_MODE_SPEED:
+			speedCurve = progSpeedSelecter;
+			eeprom_write_byte(&eeprom_speedCurve, speedCurve);
+			setProgMode(PROG_MODE_NONE);
+			break;
+	}
+}
+
+void onProgTimeout()
+{
+	if(progMode == PROG_MODE_WAIT_FOR_PACECAR)
+	{
+		setProgMode(PROG_MODE_GHOSTCAR);
+	} else {
+		setProgMode(PROG_MODE_NONE);
+	}
+}
+
+void onClick(uint8_t controllerId)
+{
+	switch(progMode)
+	{
+		case PROG_MODE_GHOSTCAR:
+		case PROG_MODE_PACECAR:
+			if(currentSpeed > 0)
+			{
+				ghostSpeed = currentSpeed;
+				eeprom_write_byte(&eeprom_ghostSpeed, ghostSpeed);
+				setCarID((progMode == PROG_MODE_GHOSTCAR) ? GHOST_CAR_ID : PACE_CAR_ID);
 			}
-		} else {
-			eeprom_write_byte(&eeprom_progInNextPowerOn, 1);
+			setProgMode(PROG_MODE_NONE);
+		break;
+
+		case PROG_MODE_WAIT_FOR_GHOSTCAR:
+			setProgMode(PROG_MODE_SPEED);
+		break;
+
+		case PROG_MODE_SPEED:
+		{
+			uint8_t a;
+			playTone();
+			progSpeedSelecter++;
+			if(progSpeedSelecter > MAX_CAR_SPEED_CURVE)
+			{
+				progSpeedSelecter = 0;
+			}
+			for(a = 0; a < progSpeedSelecter; a++) {
+				_delay_ms(100);
+				playTone();
+			}
 		}
-		/* done preparing prog mode. Tell user */
-		playTone();
+		break;
+	}
+}
+
+void onDoubleClick(uint8_t controllerId)
+{
+	/* only react on double clicks if vehicle is standing */
+	if(currentSpeed == 0)
+	{
+		switch(progMode)
+		{
+			case PROG_MODE_NONE:
+				setProgMode(PROG_MODE_CONTROLLER);
+				/* unset prog mode in ram. We don't do anything unless restart */
+				progMode = PROG_MODE_NONE;
+				/* Wait for reset or timeout */
+				playTone();
+				break;
+
+			case PROG_MODE_CONTROLLER:
+				// Got another double click while in prog mode
+				setCarID(controllerId);
+				playTone();
+				setProgMode(PROG_MODE_WAIT_FOR_GHOSTCAR);
+				break;
+
+			case PROG_MODE_WAIT_FOR_GHOSTCAR:
+				playTone();
+				setProgMode(PROG_MODE_WAIT_FOR_PACECAR);
+				break;
+
+			case PROG_MODE_WAIT_FOR_PACECAR:
+				setProgMode(PROG_MODE_PACECAR);
+				break;
+		}
 	}
 }
 
 void checkDblClick(uint8_t controllerId, uint8_t sw) {
-	if (sw) { //not pressed
-		if (controllerId == doubleClickControllerId) {
-			if (notClickSWTime == 0) {
-				countClickSW++;
-			}
-			if (notClickSWTime++ > DBLCLICK_DELAY) {
-				doubleClickControllerId = 255;
-				if (countClickSW > 0) {
-					onMultiClick(controllerId, countClickSW);
-				}
+	static volatile uint8_t lastClick=255;
+	static volatile uint8_t clickTimeout=0;
+	if (sw) { // not pressed
+		if(lastClick == controllerId) {
+			clickTimeout --;
+			if(clickTimeout == 0)
+			{
+				lastClick=255;
+				onClick(controllerId);
 			}
 		}
 	} else {
-		if (controllerId < doubleClickControllerId) {
-			doubleClickControllerId = controllerId;
-			countClickSW = 0;
-		}
-		if (doubleClickControllerId == controllerId) {
-			notClickSWTime = 0;
+		if(lastClick != controllerId) {
+			/* clicked different controller than last time */
+			if(lastClick != 255)
+			{
+				/* The last one was a single click then*/
+				onClick(lastClick);
+			}
+			/* start timeout to wait for decond click */
+			lastClick = controllerId;
+			clickTimeout = DBLCLICK_DELAY;
+		} else {
+			if((clickTimeout < DBLCLICK_DELAY) && (clickTimeout > 0))
+			{
+				lastClick=255;
+				clickTimeout=0;
+				onDoubleClick(controllerId);
+			}
 		}
 	}
 }
@@ -331,14 +412,14 @@ void onActiveControllerWordReceived(uint16_t word) {
 	
 	uint8_t anyKeyPressed = word & 0x7F;
 	if (anyKeyPressed) {
-		stopProg();
+		onAnyKeyPressed();
 	}
 	
 	uint8_t currentKeyPressed = (word << (carID & 0x0F)) & 0x40;
 	/* Run the ghostcar in case the CU doesn't send the ghostcar word.
-	 * If it does, ghostStop wins*/
-	if (carID == GHOST_CAR_ID) {
-		if ((!ghostStop) && anyKeyPressed) {
+	 * If it does, ghostRun wins*/
+	if ((carID == GHOST_CAR_ID) || (carID == PACE_CAR_ID)) {
+		if (ghostRun && anyKeyPressed) {
 			setCarSpeed(ghostSpeed);
 		}
 	} else {
@@ -357,11 +438,16 @@ void onActiveControllerWordReceived(uint16_t word) {
 void onGhostcarWordReceived(uint16_t word)
 {
 	/* decode if shostcar is allowed to run */
-	ghostStop = (word >> 5) & 0x01;
-	if(carID == GHOST_CAR_ID)
+	ghostRun = (word >> 3) & 0x01;
+	if(carID == PACE_CAR_ID)
+	{
+		/* if we are a pacecar, use other bit to determine if we are allowed to run */
+		ghostRun = (word >> 1) & 0x01;
+	}
+	if((carID == GHOST_CAR_ID) || (carID == PACE_CAR_ID))
 	{
 		/* we are a ghostcar. Check if we need to stop */
-		if(ghostStop == 1)
+		if(!ghostRun)
 		{
 			setCarSpeed(0);
 		}
@@ -382,11 +468,22 @@ void onControllerWordReceived(uint16_t word) {
 		setCarSpeed(speed);
 		calcStopTime(speed);
 		calcStopLightTime(speed);
-		if (!sw && (stopTime > STOPBEFORELIGHT_DELAY) && !progMode) {
+		if (!sw && (stopTime > STOPBEFORELIGHT_DELAY) && (progMode == PROG_MODE_NONE)) {
 			switchFrontLight();
 		}
 		lastSpeed = speed;
-	} 
+	}
+	if(controllerId == 1)
+	{
+		if(progTimer > 0)
+		{
+			progTimer --;
+			if(progTimer == 0)
+			{
+				onProgTimeout();
+			}
+		}
+	}
 	checkDblClick(controllerId, sw);
 }
 
@@ -444,12 +541,8 @@ int main(void) {
 		speedCurve = MAX_CAR_SPEED_CURVE;
 	}
 	progMode = eeprom_read_byte(&eeprom_progInNextPowerOn);
-	if (progMode) {
-		if (progMode > 1) {
-			progMode = 0;
-		}
-		eeprom_write_byte(&eeprom_progInNextPowerOn, 0);	
-	}
+	setProgMode(progMode); /* to handle timer */
+
 	lightOn = eeprom_read_byte(&eeprom_lightOn);
 	
 	power_adc_disable();
