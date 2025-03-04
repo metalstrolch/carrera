@@ -14,6 +14,7 @@
 #include <avr/power.h>
 #include <avr/pgmspace.h>
 
+/* Pinout */
 #define TRACK_PIN PB4
 #define MOTOR_PIN PB1
 #define IRLED_PIN PB0
@@ -21,16 +22,25 @@
 #define STOPLIGHT_PIN PB2
 #define NU_PIN3 PB5
 
+/* Number all packets are repeated on track in ms */
 #define PACKET_PERIOD_MS 75
+
+/* Two clicks of the same controller inside this time window form a doubleclick in ms */
 #define DBLCLICK_DELAY_MS 250
 #define DBLCLICK_DELAY DBLCLICK_DELAY_MS/PACKET_PERIOD_MS
+
+/* Abort / continue programmng after this time in ms */
 #define PROG_TIMEOUT_MS 2000
 #define PROG_TIMEOUT PROG_TIMEOUT_MS/PACKET_PERIOD_MS
+
+/* Time a car needs to be stopped to switch the light in ms */
 #define STOPBEFORELIGHT_DELAY_MS 3000
 #define STOPBEFORELIGHT_DELAY STOPBEFORELIGHT_DELAY_MS/PACKET_PERIOD_MS
+
 #define STOPLIGHT_DELAY_MS 500
 #define STOPLIGHT_DELAY STOPLIGHT_DELAY_MS/PACKET_PERIOD_MS
 
+/* track frequency in Hz */
 #define TRANSM_FREQ 10000
 #define PERIOD_QURT_CICLES F_CPU/TRANSM_FREQ/4
 
@@ -38,21 +48,22 @@
 #define ACTIV_WORD_CHECK 7
 #define CONTROLLER_WORD_CHECK 9
 
+/* special car IDs for ghost and pace car */
 #define GHOST_CAR_ID 6
 #define PACE_CAR_ID 7
 
-#define SHORT_TONE_MS 100
-#define LONG_TONE_MS 200
-
+/* maximum settings values */
 #define MAX_CAR_SPEED_CURVE 15
 #define MAX_CAR_SPEED 15
 
+/* EEProm variables */
 uint8_t EEMEM eeprom_carID; 
 uint8_t EEMEM eeprom_progInNextPowerOn; 
 uint8_t EEMEM eeprom_ghostSpeed; 
 uint8_t EEMEM eeprom_speedCurve; 
 uint8_t EEMEM eeprom_lightOn;
 
+/* Speed table containing the speed curves. 0 == stop, 255 == full speed */
 const uint8_t speedTable[MAX_CAR_SPEED_CURVE + 1][MAX_CAR_SPEED + 1] PROGMEM = {
 	{  0,  3,  6, 11, 14, 19, 22, 26, 30, 34, 38, 42, 45, 50, 53, 62},  //
 	{  0,  4,  8, 14, 18, 24, 28, 32, 38, 42, 48, 52, 56, 62, 66, 76},  // 1. LED blinkt
@@ -83,7 +94,7 @@ uint8_t volatile currentSpeed = 0;
 #define PROG_MODE_WAIT_FOR_GHOSTCAR (PROG_MODE_NONE | PROG_MODE_TO)
 #define PROG_MODE_WAIT_FOR_PACECAR (PROG_MODE_PACECAR | PROG_MODE_TO)
 uint8_t volatile progMode = 0; /* 0 normal, 1 controller, 2 ghostcar, 3 pacecar */
-uint8_t volatile progTimer = 0;
+uint8_t volatile progTime = 0;
 uint8_t volatile ghostRun = 1; /* ghostcar stopped == 0, ghostcar free to run == 1 */
 uint8_t volatile ghostSpeed = 0;
 uint8_t volatile speedCurve = 0;
@@ -135,6 +146,10 @@ static inline void interruptsInit() {
 void setCarSpeed(uint8_t speed) {
 	if(speed > MAX_CAR_SPEED)
 		speed = MAX_CAR_SPEED;
+	/* reset stop timer as long as were driving */
+	if(speed > 0) {
+		stopTime = STOPBEFORELIGHT_DELAY;
+	}
 	currentSpeed = speed;
 	OCR0B = 255 - pgm_read_byte(&speedTable[speedCurve][speed]);
 }
@@ -143,16 +158,6 @@ void setCarID(uint8_t newId) {
 	carID = newId;
 	eeprom_write_byte(&eeprom_carID, newId);
 	startLEDPWM();
-}
-
-static inline void calcStopTime(uint8_t speed) {
-	if (speed == 0) {
-		if (stopTime < 255) {
-			stopTime++;
-		}
-	} else {
-		stopTime = 0;
-	}
 }
 
 void setLights() {
@@ -165,7 +170,6 @@ void setLights() {
 //}
 
 static inline void switchFrontLight() {
-	stopTime = STOPBEFORELIGHT_DELAY - DBLCLICK_DELAY;
 	lightOn = ~lightOn;
 	eeprom_write_byte(&eeprom_lightOn, lightOn);
 	setLights();
@@ -188,37 +192,49 @@ static inline void stopLightMiddleOn() {
 	}
 }
 
+/* Set prog mode. And store it to eeprom. Intermediate states are equal to
+ * main modes on eeprom level as they shouldn't survive power cycle.
+ * Start progTime if required for the state */
 void setProgMode(uint8_t mode)
 {
+	/* sanity check for empty flash */
 	if(mode == 0xff)
 	{
 		mode = PROG_MODE_NONE;
 	}
+	/* save in eeprom if neccesary */
 	if(progMode != mode)
 	{
 		progMode = mode;
 		eeprom_write_byte(&eeprom_progInNextPowerOn, mode & 0x0f);
 	}
+	/* arm or disarm timer */
 	if((mode == PROG_MODE_CONTROLLER) || ((mode & PROG_MODE_TO) == PROG_MODE_TO))
 	{
-		progTimer = PROG_TIMEOUT;
+		progTime = PROG_TIMEOUT;
 	} else
 	{
-		progTimer = 0;
+		progTime = 0;
 	}
 }
 
+/* React to any (unspecific) controller being pressed */
 static inline void onAnyKeyPressed() {
-	/* stop timeout */
 	switch(progMode)
 	{
 		case PROG_MODE_WAIT_FOR_PACECAR:
+			/* Driving the car aborts waiting for pacecar programming */
 			setProgMode(PROG_MODE_GHOSTCAR);
 			break;
 		case PROG_MODE_WAIT_FOR_GHOSTCAR:
+			/* Pressing a control aborts waiting for the second double click.
+			 * Programming is finished then
+			 */
 			setProgMode(PROG_MODE_NONE);
 			break;
 		case PROG_MODE_SPEED:
+			/* Being in speed programming mode, pressing a control confirms the selected value
+			 */
 			speedCurve = progSpeedSelecter;
 			eeprom_write_byte(&eeprom_speedCurve, speedCurve);
 			setProgMode(PROG_MODE_NONE);
@@ -226,23 +242,33 @@ static inline void onAnyKeyPressed() {
 	}
 }
 
+/* When the progTime ran out */
 static inline void onProgTimeout()
 {
 	if(progMode == PROG_MODE_WAIT_FOR_PACECAR)
 	{
+		/* Timeout waiting for pacecar programming double click.
+		 * Continue with ghostcar programming
+		 */
 		setProgMode(PROG_MODE_GHOSTCAR);
 	} else {
+		/* All other timeouts abort programming. But remember, there can only
+		 * be a timeout if a timeout was set. Not all states have timeout
+		 */
 		setProgMode(PROG_MODE_NONE);
 	}
 }
 
+/* When any controllers swith button was pressed and released once */
 void onClick(uint8_t controllerId)
 {
 	switch(progMode)
 	{
 		case PROG_MODE_GHOSTCAR:
 		case PROG_MODE_PACECAR:
-			if(currentSpeed > 0)
+			/* In case of ghostcar or pacecar programming (driving) pressing the key
+			 * of the controller confirms the actual speed to eeprom and sets the ID */
+			if((controllerId == carID) && (currentSpeed > 0))
 			{
 				ghostSpeed = currentSpeed;
 				eeprom_write_byte(&eeprom_ghostSpeed, ghostSpeed);
@@ -252,11 +278,17 @@ void onClick(uint8_t controllerId)
 		break;
 
 		case PROG_MODE_WAIT_FOR_GHOSTCAR:
+			/* One additional (3rd) click after confirming the controller brings us to
+			 * manual speed programming mode */
 			setProgMode(PROG_MODE_SPEED);
 		break;
 
 		case PROG_MODE_SPEED:
 		{
+			/* Were in manual speed prog mode (for 143 red box).
+			 * increase speed index on every click. Will be saved
+			 * one the car is driven. We try to buzz out the actual value.
+			 */
 			uint8_t a;
 			playTone();
 			progSpeedSelecter++;
@@ -270,9 +302,17 @@ void onClick(uint8_t controllerId)
 			}
 		}
 		break;
+		case PROG_MODE_NONE:
+			/* toggle front light if tanding still long enough */
+			if (stopTime == 0)
+			{
+				switchFrontLight();
+			}
+		break;
 	}
 }
 
+/* When a double click of any controller was detected */
 static inline void onDoubleClick(uint8_t controllerId)
 {
 	/* only react on double clicks if vehicle is standing */
@@ -281,6 +321,9 @@ static inline void onDoubleClick(uint8_t controllerId)
 		switch(progMode)
 		{
 			case PROG_MODE_NONE:
+				/* We got a double click. Go might go to programming mode. It's always controller programming,
+				 * as the programming type is detected after the power cycle. ProgTime resets this if
+				 * no power cycle happenes */
 				setProgMode(PROG_MODE_CONTROLLER);
 				/* unset prog mode in ram. We don't do anything unless restart */
 				progMode = PROG_MODE_NONE;
@@ -289,18 +332,29 @@ static inline void onDoubleClick(uint8_t controllerId)
 				break;
 
 			case PROG_MODE_CONTROLLER:
-				// Got another double click while in prog mode
+				/* Were in prog mode after a poer cycle and got the correct double click.
+				 * So let's bind the carID first and then wait for eventual additional clicks until
+				 * progTime or any controller pressing the speed lever */
 				setCarID(controllerId);
 				playTone();
 				setProgMode(PROG_MODE_WAIT_FOR_GHOSTCAR);
 				break;
 
 			case PROG_MODE_WAIT_FOR_GHOSTCAR:
+				/* We're still waiting for ghost car programming and got another double click in time.
+				 * Waiting for ghost car programming arms pacecar programming. Now one can drive as long as 
+				 * the controller's switch button is pressed another time. This even survives power cycle
+				 */
 				playTone();
 				setProgMode(PROG_MODE_WAIT_FOR_PACECAR);
 				break;
 
 			case PROG_MODE_WAIT_FOR_PACECAR:
+				/* another double click detected. We finally reached pacecar programming. now one can drive
+				 * as long as the controller's switch button is pressed another time. this even survives power
+				 * cycle.
+				 */
+				playTone();
 				setProgMode(PROG_MODE_PACECAR);
 				break;
 		}
@@ -341,6 +395,10 @@ static inline void checkDblClick(uint8_t controllerId, uint8_t sw) {
 	}
 }
 
+/* Programming word is coming bit reversed. That's bad as
+ * correcting this is quite expensive in processing power
+ * and flash space. This functions does so.
+ */
 static inline int8_t reverseBits(uint8_t byte) {
         uint8_t value = 0;
         if(byte & 0x80) value |= 0x1;
@@ -456,33 +514,52 @@ static inline void onGhostcarWordReceived(uint16_t word)
 	//uint8_t pacecarOnTrack = (word >> 2) & 0x01;
 }
 
+static inline void driveProgTimer()
+{
+	if(progTime > 0)
+	{
+
+		progTime --;
+		if(progTime == 0)
+		{
+			onProgTimeout();
+		}
+	}
+
+}
+
+static inline void driveStopTimer()
+{
+
+	if(stopTime > 0)
+	{
+		stopTime --;
+	}
+
+}
+
 static inline void onControllerWordReceived(uint16_t word) {
 	uint8_t controllerId = (word >> 6) & 0x07;
 	uint8_t speed = (word >> 1) & 0x0F;
 	uint8_t sw = (word >> 5) & 1;
+	/* If our controller, set speed */
 	if (controllerId == carID) {
 		setCarSpeed(speed);
-		calcStopTime(speed);
 		calcStopLightTime(speed);
-		if (!sw && (stopTime > STOPBEFORELIGHT_DELAY) && (progMode == PROG_MODE_NONE)) {
-			switchFrontLight();
-		}
 		lastSpeed = speed;
 	}
+	/* use controller number 1 to drive timers */
 	if(controllerId == 1)
 	{
-		if(progTimer > 0)
-		{
-			progTimer --;
-			if(progTimer == 0)
-			{
-				onProgTimeout();
-			}
-		}
+		driveProgTimer();
+		driveStopTimer();
 	}
+	/* react on clicks */
 	checkDblClick(controllerId, sw);
 }
 
+/* Received something from track. Distinguish the messages by their length
+ */
 static inline void onWordReceived(uint16_t word) {
 	stopLightMiddleOn();
 	if ((word >> CONTROLLER_WORD_CHECK) == 1) {
