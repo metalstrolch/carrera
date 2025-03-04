@@ -290,7 +290,6 @@ void onClick(uint8_t controllerId)
 			 * one the car is driven. We try to buzz out the actual value.
 			 */
 			uint8_t a;
-			playTone();
 			progSpeedSelecter++;
 			if(progSpeedSelecter > MAX_CAR_SPEED_CURVE)
 			{
@@ -328,7 +327,6 @@ static inline void onDoubleClick(uint8_t controllerId)
 				/* unset prog mode in ram. We don't do anything unless restart */
 				progMode = PROG_MODE_NONE;
 				/* Wait for reset or timeout */
-				playTone();
 				break;
 
 			case PROG_MODE_CONTROLLER:
