@@ -26,7 +26,7 @@
 #define PACKET_PERIOD_MS 75
 
 /* Two clicks of the same controller inside this time window form a doubleclick in ms */
-#define DBLCLICK_DELAY_MS 250
+#define DBLCLICK_DELAY_MS 500
 #define DBLCLICK_DELAY DBLCLICK_DELAY_MS/PACKET_PERIOD_MS
 
 /* Abort / continue programmng after this time in ms */
@@ -103,6 +103,7 @@ uint8_t volatile lightOn = 0;
 uint8_t volatile stopTime = 0;
 uint8_t volatile stopLightTime = 0;
 uint8_t volatile lastSpeed = 0;
+uint8_t volatile anyKeyPressed = 0;
 
 void playTone() {
 	cli();
@@ -260,7 +261,7 @@ static inline void onProgTimeout()
 }
 
 /* When any controllers swith button was pressed and released once */
-void onClick(uint8_t controllerId)
+static inline void onClick(uint8_t controllerId)
 {
 	switch(progMode)
 	{
@@ -315,7 +316,7 @@ void onClick(uint8_t controllerId)
 static inline void onDoubleClick(uint8_t controllerId)
 {
 	/* only react on double clicks if vehicle is standing */
-	if(currentSpeed == 0)
+	if((!anyKeyPressed) && ((carID >= GHOST_CAR_ID) || (currentSpeed == 0)))
 	{
 		switch(progMode)
 		{
@@ -360,35 +361,54 @@ static inline void onDoubleClick(uint8_t controllerId)
 }
 
 static inline void checkDblClick(uint8_t controllerId, uint8_t sw) {
+	static volatile uint8_t buttonState = 0;
 	static volatile uint8_t lastClick=255;
 	static volatile uint8_t clickTimeout=0;
-	if (sw) { // not pressed
-		if(lastClick == controllerId) {
-			clickTimeout --;
-			if(clickTimeout == 0)
+	uint8_t mask = 0x01 << (controllerId & 0x0F);
+	if( sw ) {
+		if((buttonState & mask) == mask)
+		{
+			/* button was released */
+			if(lastClick == 255) {
+				/* first click */
+				lastClick = controllerId;
+				/* start timer */
+				switch(progMode)
+				{
+					case PROG_MODE_GHOSTCAR:
+					case PROG_MODE_PACECAR:
+					case PROG_MODE_SPEED:
+						/* we don't expect double clicks */
+						clickTimeout = 1;
+						break;
+					default:
+						clickTimeout = DBLCLICK_DELAY;
+						break;
+				}
+			}
+			else if(lastClick == controllerId)
 			{
+				/* secondClick */
+				onDoubleClick(controllerId);
+				/* stop timer */
+				clickTimeout = 0;
+				/* wait for next */
 				lastClick=255;
-				onClick(controllerId);
 			}
 		}
+		/* clear button from button bit mask */
+		buttonState &= (~mask);
 	} else {
-		if(lastClick != controllerId) {
-			/* clicked different controller than last time */
-			if(lastClick != 255)
-			{
-				/* The last one was a single click then*/
-				onClick(lastClick);
-			}
-			/* start timeout to wait for decond click */
-			lastClick = controllerId;
-			clickTimeout = DBLCLICK_DELAY;
-		} else {
-			if((clickTimeout < DBLCLICK_DELAY) && (clickTimeout > 0))
-			{
-				lastClick=255;
-				clickTimeout=0;
-				onDoubleClick(controllerId);
-			}
+		/* set button in button bit mask */
+		buttonState |= mask;
+	}
+	/* drive the timer */
+	if ((controllerId == 2) && (clickTimeout > 0)) {
+		clickTimeout --;
+		if((clickTimeout == 0) && (lastClick != 255))
+		{
+			onClick(lastClick);
+			lastClick = 255;
 		}
 	}
 }
@@ -462,7 +482,7 @@ static inline void onActiveControllerWordReceived(uint16_t word) {
 		return;
 	}
 	
-	uint8_t anyKeyPressed = word & 0x7F;
+	anyKeyPressed = word & 0x7F;
 	if (anyKeyPressed) {
 		onAnyKeyPressed();
 	}
@@ -470,7 +490,7 @@ static inline void onActiveControllerWordReceived(uint16_t word) {
 	uint8_t currentKeyPressed = (word << (carID & 0x0F)) & 0x40;
 	/* Run the ghostcar in case the CU doesn't send the ghostcar word.
 	 * If it does, ghostRun wins*/
-	if ((carID == GHOST_CAR_ID) || (carID == PACE_CAR_ID)) {
+	if (carID >= GHOST_CAR_ID) {
 		if (ghostRun && anyKeyPressed) {
 			setCarSpeed(ghostSpeed);
 		}
@@ -496,7 +516,7 @@ static inline void onGhostcarWordReceived(uint16_t word)
 		/* if we are a pacecar, use other bit to determine if we are allowed to run */
 		ghostRun = (word >> 1) & 0x01;
 	}
-	if((carID == GHOST_CAR_ID) || (carID == PACE_CAR_ID))
+	if(carID >= GHOST_CAR_ID)
 	{
 		/* we are a ghostcar. Check if we need to stop */
 		if(!ghostRun)
@@ -508,8 +528,6 @@ static inline void onGhostcarWordReceived(uint16_t word)
 			setCarSpeed(ghostSpeed);
 		}
 	}
-	//uint8_t pacecarActive = (word >> 1) & 0x01;
-	//uint8_t pacecarOnTrack = (word >> 2) & 0x01;
 }
 
 static inline void driveProgTimer()
@@ -606,6 +624,10 @@ ISR(PCINT0_vect) {
 
 int main(void) {
 	carID = eeprom_read_byte(&eeprom_carID);
+	if(carID > PACE_CAR_ID)
+	{
+		carID = 0;
+	}
 	ghostSpeed = eeprom_read_byte(&eeprom_ghostSpeed);
 	speedCurve = eeprom_read_byte(&eeprom_speedCurve);
 	if (speedCurve > MAX_CAR_SPEED_CURVE) {
