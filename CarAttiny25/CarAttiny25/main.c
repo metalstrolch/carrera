@@ -92,7 +92,7 @@ uint8_t volatile currentSpeed = 0;
 #define PROG_MODE_PACECAR 3
 #define PROG_MODE_SPEED (PROG_MODE_NONE | 0x80)
 #define PROG_MODE_WAIT_FOR_GHOSTCAR (PROG_MODE_NONE | PROG_MODE_TO)
-#define PROG_MODE_WAIT_FOR_PACECAR (PROG_MODE_PACECAR | PROG_MODE_TO)
+#define PROG_MODE_WAIT_FOR_PACECAR (PROG_MODE_GHOSTCAR | PROG_MODE_TO)
 uint8_t volatile progMode = 0; /* 0 normal, 1 controller, 2 ghostcar, 3 pacecar */
 uint8_t volatile progTime = 0;
 uint8_t volatile ghostRun = 1; /* ghostcar stopped == 0, ghostcar free to run == 1 */
@@ -341,7 +341,7 @@ static inline void onDoubleClick(uint8_t controllerId)
 
 			case PROG_MODE_WAIT_FOR_GHOSTCAR:
 				/* We're still waiting for ghost car programming and got another double click in time.
-				 * Waiting for ghost car programming arms pacecar programming. Now one can drive as long as 
+				 * Waiting for pace car programming arms ghostcar programming. Now one can drive as long as 
 				 * the controller's switch button is pressed another time. This even survives power cycle
 				 */
 				playTone();
