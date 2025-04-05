@@ -66,21 +66,21 @@ uint8_t EEMEM eeprom_lightOn;
 /* Speed table containing the speed curves. 0 == stop, 255 == full speed */
 const uint8_t speedTable[MAX_CAR_SPEED_CURVE + 1][MAX_CAR_SPEED + 1] PROGMEM = {
 	{  0,  3,  6, 11, 14, 19, 22, 26, 30, 34, 38, 42, 45, 50, 53, 62},  //
-	{  0,  4,  8, 14, 18, 24, 28, 32, 38, 42, 48, 52, 56, 62, 66, 76},  // 1. LED blinkt
-	{  0,  4, 10, 16, 22, 28, 32, 38, 44, 50, 56, 60, 66, 72, 78, 88},  // 1. LED an
-	{  0,  6, 13, 22, 28, 34, 40, 46, 52, 58, 64, 70, 76, 82, 88,100},  // 2. LED blinkt
+	{  0,  4,  8, 14, 18, 24, 28, 32, 38, 42, 48, 52, 56, 62, 66, 76},  // 1. LED blinks
+	{  0,  4, 10, 16, 22, 28, 32, 38, 44, 50, 56, 60, 66, 72, 78, 88},  // 1. LED on
+	{  0,  6, 13, 22, 28, 34, 40, 46, 52, 58, 64, 70, 76, 82, 88,100},  // 2. LED blinks
 	{  0,  7, 15, 23, 30, 37, 44, 51, 58, 65, 72, 79, 86, 93,100,115},  //
-	{  0,  8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,104,112,126},  // 2. LED an
-	{  0,  8, 16, 26, 36, 44, 56, 64, 72, 80, 88, 96,104,113,122,138},  // 3. LED blinkt
-	{  0,  8, 18, 28, 38, 48, 56, 66, 76, 86, 96,104,114,124,133,152},  // 3. LED an
+	{  0,  8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,104,112,126},  // 2. LED on
+	{  0,  8, 16, 26, 36, 44, 56, 64, 72, 80, 88, 96,104,113,122,138},  // 3. LED blinks
+	{  0,  8, 18, 28, 38, 48, 56, 66, 76, 86, 96,104,114,124,133,152},  // 3. LED on
 	{  0,  9, 20, 32, 41, 52, 62, 72, 83, 94,104,114,125,136,147,165},  //
-	{  0, 10, 22, 35, 44, 56, 67, 78, 90,101,112,124,136,148,160,176},  // 4. LED blinkt
+	{  0, 10, 22, 35, 44, 56, 67, 78, 90,101,112,124,136,148,160,176},  // 4. LED blinks
 	{  0, 11, 23, 37, 48, 60, 72, 84, 96,108,120,132,144,157,169,190},  //
-	{  0, 12, 24, 38, 51, 64, 76, 89,102,115,128,140,152,165,178,202},  // 4. LED an
+	{  0, 12, 24, 38, 51, 64, 76, 89,102,115,128,140,152,165,178,202},  // 4. LED on
 	{  0, 13, 26, 41, 55, 68, 81, 95,108,122,136,149,162,176,189,215},  //
-	{  0, 14, 28, 43, 58, 72, 86,100,114,129,144,158,172,186,200,228},  // 5. LED blinkt
+	{  0, 14, 28, 43, 58, 72, 86,100,114,129,144,158,172,186,200,228},  // 5. LED blinks
 	{  0, 15, 30, 46, 61, 76, 91,106,121,137,152,167,182,197,212,240},  //
-	{  0, 16, 32, 48, 64, 80, 96,112,128,144,160,176,192,208,224,255},  // 5. LED an
+	{  0, 16, 32, 48, 64, 80, 96,112,128,144,160,176,192,208,224,255},  // 5. LED on
 };
 
 uint8_t volatile carID = 255;
@@ -507,14 +507,18 @@ static inline void onActiveControllerWordReceived(uint16_t word) {
 	}
 }
 
-static inline void onGhostcarWordReceived(uint16_t word)
+static inline void onGhostcarWordReceived(uint16_t word, uint8_t pitlane)
 {
 	/* decode if shostcar is allowed to run */
 	ghostRun = (word >> 3) & 0x01;
-	if(carID == PACE_CAR_ID)
+	if((ghostRun) && (carID == PACE_CAR_ID))
 	{
-		/* if we are a pacecar, use other bit to determine if we are allowed to run */
-		ghostRun = (word >> 1) & 0x01;
+		/* were a ghost car. Check if were in pit lane */
+	        if(pitlane)
+		{
+		    /* We're in pit lane and requested to stop there. Do so */
+		    ghostRun = (word >> 1) & 0x01;
+		}
 	}
 	if(carID >= GHOST_CAR_ID)
 	{
@@ -576,13 +580,13 @@ static inline void onControllerWordReceived(uint16_t word) {
 
 /* Received something from track. Distinguish the messages by their length
  */
-static inline void onWordReceived(uint16_t word) {
+static inline void onWordReceived(uint16_t word, uint8_t pitlane) {
 	stopLightMiddleOn();
 	if ((word >> CONTROLLER_WORD_CHECK) == 1) {
 		if ((word >> 6) != 0x0F) {
 			onControllerWordReceived(word);
 		} else {
-			onGhostcarWordReceived(word);
+			onGhostcarWordReceived(word, pitlane);
 		}
 	} else
 	if ((word >> PROG_WORD_CHECK) == 1) {
@@ -617,7 +621,9 @@ ISR(PCINT0_vect) {
 		
 		secondHalfCycle = (PINB >> TRACK_PIN) & 1;
 	}
-	onWordReceived(receivedValue);
+	/* we know that firstHalfCycle == secondHalfCycle. If both are 0, were
+	 * in pit lanei, otherwise not. At least if the word is otherwise OK. */
+	onWordReceived(receivedValue, (firstHalfCycle==0));
 	GIFR = 1 << PCIF;
 }
 
