@@ -1,12 +1,23 @@
-# CarAttiny25
-Custom firmware for Carrera Digital 143 decoder. All functions work with standart Digital 143 Black Box. 
+# CarAttiny25 metalstrolch edition
+Custom firmware for Carrera Digital 143 decoder.
+Adds most missing features compared to stock digital 132 decoder.
+Most of the added features are available on 143 red box as well using controller click programming.
+The programming is compatible to the controller click programming of the carrera 132 blackbox.
+The CU does nothing else than automate the click programming.
 
-Additional features:
+Additional features to stock 143 firmware:
 - Ghost car funciton,
-- Speed limit,
-- Front light support.
+- Pace car function with CU and pit lane,
+- Speed selection with CU as usual, or with click code on Redbox / Blackbox,
+- Front light support with addition hardware
+- Maximum possible speed. Stock firmware limits to around 80% possible speed.
 
 I also plan to add support for the stop light.
+
+Things yet to be done or imposible to do:
+- There is no hardware support for brakes, so no brake strength selection.
+- Real mode fuel simulation still missing. There is no protocol description how the speed degrade on full tank is done. Maybe later.
+- Old BB car centric fuel programming. This is obsolete by carrera so I won't invest on that albeit possible.
 
 
 # MiniCarreraDecoder

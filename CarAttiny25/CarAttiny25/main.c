@@ -126,7 +126,7 @@ static inline void timersInit() {
 }
 
 void startLEDPWM() {
-	OCR1C = 32 * (carID + 1);
+	OCR1C = 31 + (32 * carID);
 	OCR1A = OCR1C - 16;
 }
 
